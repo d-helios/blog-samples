@@ -1,0 +1,12 @@
+{
+  "group": "MyServiceRole",
+  "rules": {
+    "/orders.v1.OrdersService/GetOrder":           { "any_scope": ["ReadOnly", "ReadWrite"] },
+    "/orders.v1.OrdersService/CreateOrder":        { "any_scope": ["ReadWrite"] },
+    "/orders.v1.OrdersService/SubmitOrder":        { "any_scope": ["Submit"] },
+    "/inventory.v1.InventoryService/GetStock":     { "any_scope": ["ReadOnly", "ReadWrite"] },
+    "/inventory.v1.InventoryService/Reserve":      { "any_scope": ["ReadWrite"] },
+    "/inventory.v1.InventoryService/Commit":       { "any_scope": ["Submit"] },
+    "/inventory.v1.InventoryService/Recalculate":  { "callers": ["spiffe://cluster.local/ns/demo/sa/orders"] }
+  }
+}

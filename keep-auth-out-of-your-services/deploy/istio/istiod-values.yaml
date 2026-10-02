@@ -1,0 +1,28 @@
+pilot:
+  autoscaleEnabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  env:
+    # Sidecars fetch Authentik's JWKS themselves and retry until it is up.
+    # With the default (istiod fetches), an IdP that starts after the mesh
+    # leaves every token rejected until the next refresh.
+    PILOT_JWT_ENABLE_REMOTE_JWKS: envoy
+    ENABLE_NATIVE_SIDECARS: "true"
+
+global:
+  proxy:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+
+meshConfig:
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  extensionProviders:
+    - name: opa
+      envoyExtAuthzGrpc:
+        service: opa.demo.svc.cluster.local
+        port: 9191

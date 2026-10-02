@@ -1,0 +1,5 @@
+apiVersion: v2
+name: app
+description: A plain HTTP service. Nothing in here knows about authentication.
+type: application
+version: 0.1.0

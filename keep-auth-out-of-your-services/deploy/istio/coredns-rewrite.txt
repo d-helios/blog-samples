@@ -1,0 +1,4 @@
+    rewrite stop {
+        name regex (.+)\.localtest\.me\.$ ingress.istio-ingress.svc.cluster.local.
+        answer auto
+    }

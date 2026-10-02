@@ -1,0 +1,31 @@
+orders:
+  nameOverride: orders
+  env:
+    INVENTORY_URL: http://inventory
+
+inventory:
+  nameOverride: inventory
+
+web:
+  nameOverride: web
+  # NiceGUI creates per-session storage on every HTTP request, so probe the socket.
+  probePath: ""
+  env:
+    APP_URL: http://web.localtest.me
+    ORDERS_URL: http://orders
+    OIDC_URL: http://auth.localtest.me
+    OIDC_APP_SLUG: demo-web
+    OIDC_CLIENT_ID: demo-web
+  secretEnv:
+    OIDC_CLIENT_SECRET: {secret: demo-credentials, key: WEB_CLIENT_SECRET}
+    STORAGE_SECRET: {secret: web-session, key: STORAGE_SECRET}
+  writableDirs:
+    - /srv/.nicegui
+    - /tmp
+  resources:
+    requests:
+      cpu: 20m
+      memory: 128Mi
+
+opa:
+  policyChecksum: ""

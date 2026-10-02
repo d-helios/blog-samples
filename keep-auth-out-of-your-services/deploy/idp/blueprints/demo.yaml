@@ -1,0 +1,200 @@
+# yaml-language-server: $schema=https://goauthentik.io/blueprints/schema.json
+version: 1
+metadata:
+  name: keep-auth-out-of-your-services demo
+entries:
+  - model: authentik_core.group
+    id: group
+    identifiers:
+      name: MyServiceRole
+
+  # API scopes. Authentik puts every requested scope into the token, so each
+  # mapping rewrites the `scope` claim and keeps only the API scopes listed in
+  # the user's `scopes` attribute. All three mappings return the same value.
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-readonly
+    identifiers:
+      scope_name: ReadOnly
+    attrs:
+      name: "demo: ReadOnly"
+      description: Read orders and stock
+      expression: &scope_filter |
+        api_scopes = {"ReadOnly", "ReadWrite", "Submit"}
+        granted = set(request.user.attributes.get("scopes", []))
+        kept = [s for s in sorted(token.scope) if s not in api_scopes or s in granted]
+        return {"scope": " ".join(kept)}
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-readwrite
+    identifiers:
+      scope_name: ReadWrite
+    attrs:
+      name: "demo: ReadWrite"
+      description: Create orders and reserve stock
+      expression: *scope_filter
+  - model: authentik_providers_oauth2.scopemapping
+    id: scope-submit
+    identifiers:
+      scope_name: Submit
+    attrs:
+      name: "demo: Submit"
+      description: Submit orders and commit stock
+      expression: *scope_filter
+
+  - model: authentik_core.user
+    id: alice
+    identifiers:
+      username: alice
+    attrs:
+      name: Alice (viewer)
+      email: alice@example.com
+      password: !Env DEMO_USER_PASSWORD
+      groups: [!KeyOf group]
+      attributes:
+        scopes: [ReadOnly]
+  - model: authentik_core.user
+    id: bob
+    identifiers:
+      username: bob
+    attrs:
+      name: Bob (buyer)
+      email: bob@example.com
+      password: !Env DEMO_USER_PASSWORD
+      groups: [!KeyOf group]
+      attributes:
+        scopes: [ReadWrite]
+  - model: authentik_core.user
+    id: dave
+    identifiers:
+      username: dave
+    attrs:
+      name: Dave (approver)
+      email: dave@example.com
+      password: !Env DEMO_USER_PASSWORD
+      groups: [!KeyOf group]
+      attributes:
+        scopes: [ReadOnly, Submit]
+  - model: authentik_core.user
+    id: carol
+    identifiers:
+      username: carol
+    attrs:
+      name: Carol (outsider)
+      email: carol@example.com
+      password: !Env DEMO_USER_PASSWORD
+      groups: []
+      attributes:
+        scopes: [ReadOnly, ReadWrite, Submit]
+
+  # App passwords let the e2e tests get user tokens without a browser.
+  - model: authentik_core.token
+    identifiers:
+      identifier: alice-e2e
+    attrs:
+      intent: app_password
+      expiring: false
+      user: !KeyOf alice
+      key: !Env ALICE_APP_PASSWORD
+  - model: authentik_core.token
+    identifiers:
+      identifier: bob-e2e
+    attrs:
+      intent: app_password
+      expiring: false
+      user: !KeyOf bob
+      key: !Env BOB_APP_PASSWORD
+  - model: authentik_core.token
+    identifiers:
+      identifier: dave-e2e
+    attrs:
+      intent: app_password
+      expiring: false
+      user: !KeyOf dave
+      key: !Env DAVE_APP_PASSWORD
+  - model: authentik_core.token
+    identifiers:
+      identifier: carol-e2e
+    attrs:
+      intent: app_password
+      expiring: false
+      user: !KeyOf carol
+      key: !Env CAROL_APP_PASSWORD
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-web
+    identifiers:
+      name: demo-web
+    attrs:
+      client_type: confidential
+      client_id: demo-web
+      client_secret: !Env WEB_CLIENT_SECRET
+      grant_types: [authorization_code, refresh_token]
+      redirect_uris:
+        - matching_mode: strict
+          url: http://web.localtest.me/auth/callback
+          redirect_uri_type: authorization
+        - matching_mode: strict
+          url: http://web.localtest.me/
+          redirect_uri_type: logout
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      # Ends the Authentik session too, so "log out" really lets you switch user.
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-invalidation-flow]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      # One issuer for both clients, so the mesh needs a single JWT rule.
+      issuer_mode: global
+      include_claims_in_id_token: true
+      access_token_validity: minutes=5
+      refresh_token_validity: hours=8
+      property_mappings: &mappings
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-offline_access]]
+        - !KeyOf scope-readonly
+        - !KeyOf scope-readwrite
+        - !KeyOf scope-submit
+  - model: authentik_core.application
+    id: app-web
+    identifiers:
+      slug: demo-web
+    attrs:
+      name: Orders demo
+      provider: !KeyOf provider-web
+      meta_launch_url: http://web.localtest.me/
+  # Only MyServiceRole members can log in or get a token. The mesh checks the
+  # group again on every call, so a token issued elsewhere does not help either.
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf app-web
+      group: !KeyOf group
+    attrs:
+      order: 0
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider-cli
+    identifiers:
+      name: demo-cli
+    attrs:
+      client_type: public
+      client_id: demo-cli
+      grant_types: [client_credentials]
+      redirect_uris: []
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      issuer_mode: global
+      include_claims_in_id_token: true
+      access_token_validity: minutes=10
+      property_mappings: *mappings
+  - model: authentik_core.application
+    id: app-cli
+    identifiers:
+      slug: demo-cli
+    attrs:
+      name: Orders demo (e2e tests)
+      provider: !KeyOf provider-cli
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf app-cli
+      group: !KeyOf group
+    attrs:
+      order: 0

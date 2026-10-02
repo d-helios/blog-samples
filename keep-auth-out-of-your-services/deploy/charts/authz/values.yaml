@@ -1,0 +1,9 @@
+jwt:
+  issuer: http://auth.localtest.me/
+  # Sidecars fetch keys only from hosts in the mesh registry, so this uses
+  # the Kubernetes service rather than the public name.
+  jwksUri: http://authentik-server.authentik.svc.cluster.local/application/o/demo-web/jwks/
+  audiences: [demo-web, demo-cli]
+
+# Workloads whose every request is sent to OPA.
+protectedWorkloads: [orders, inventory]

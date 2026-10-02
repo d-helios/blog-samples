@@ -1,0 +1,6 @@
+deploy/umbrella/charts/
+deploy/umbrella/Chart.lock
+services/web/.venv/
+services/web/.nicegui/
+__pycache__/
+.idea/

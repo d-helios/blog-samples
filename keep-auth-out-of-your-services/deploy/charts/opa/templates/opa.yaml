@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: opa
+spec:
+  selector:
+    app: opa
+  ports:
+    - name: grpc-authz
+      port: 9191
+      targetPort: grpc-authz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opa
+  labels:
+    app: opa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opa
+  template:
+    metadata:
+      labels:
+        app: opa
+        # OPA is called by the sidecars; it does not need one itself.
+        sidecar.istio.io/inject: "false"
+      annotations:
+        checksum/policy: {{ .Values.policyChecksum | default "" | quote }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opa
+          image: {{ .Values.image }}
+          args:
+            - run
+            - --server
+            - --addr=localhost:8181
+            - --diagnostic-addr=0.0.0.0:8282
+            - --log-format=json
+            - --set=plugins.envoy_ext_authz_grpc.addr=:9191
+            - --set=plugins.envoy_ext_authz_grpc.path=envoy/authz/result
+            - --set=decision_logs.console=true
+            - /policy/authz.rego
+            - /policy/log_mask.rego
+            - /policy/data.json
+          ports:
+            - name: grpc-authz
+              containerPort: 9191
+            - name: diagnostics
+              containerPort: 8282
+          readinessProbe:
+            httpGet:
+              path: /health?plugins
+              port: diagnostics
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: diagnostics
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ .Values.policyConfigMap }}

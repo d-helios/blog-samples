@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package inventory.v1;
+
+service InventoryService {
+  rpc GetStock(GetStockRequest) returns (GetStockResponse);
+  rpc Reserve(ReserveRequest) returns (ReserveResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Recalculate(RecalculateRequest) returns (RecalculateResponse);
+}
+
+message Stock {
+  string sku = 1;
+  int32 available = 2;
+  int32 reserved = 3;
+  int32 committed = 4;
+}
+
+message GetStockRequest {
+  string sku = 1;
+}
+
+message GetStockResponse {
+  Stock stock = 1;
+}
+
+message ReserveRequest {
+  string order_id = 1;
+  string sku = 2;
+  int32 quantity = 3;
+}
+
+message ReserveResponse {
+  Stock stock = 1;
+}
+
+message CommitRequest {
+  string order_id = 1;
+}
+
+message CommitResponse {
+  Stock stock = 1;
+}
+
+message RecalculateRequest {}
+
+message RecalculateResponse {
+  repeated Stock stock = 1;
+}

@@ -1,0 +1,82 @@
+# Both jobs run hurl inside the mesh. They differ only in the service account,
+# which is the mesh identity the sidecar presents to orders and inventory.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: testclient
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-users
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: e2e
+    spec:
+      serviceAccountName: testclient
+      restartPolicy: Never
+      containers:
+        - name: hurl
+          image: ghcr.io/orange-opensource/hurl:8.0.1@sha256:49a02dc39d7084e5a6e8c57e2d4754ef102e4ee3761a02ef6dc0e305ab1a832d
+          command: [sh, -c]
+          args:
+            - >-
+              exec hurl --test --jobs 1 --no-color --error-format long
+              --variable idp=http://auth.localtest.me
+              --variable reservation=$(date +%s)
+              --secret alice_app_password="$ALICE_APP_PASSWORD"
+              --secret bob_app_password="$BOB_APP_PASSWORD"
+              --secret dave_app_password="$DAVE_APP_PASSWORD"
+              --secret carol_app_password="$CAROL_APP_PASSWORD"
+              /tests/users.hurl
+          envFrom:
+            - secretRef:
+                name: demo-credentials
+          volumeMounts:
+            - name: tests
+              mountPath: /tests
+      volumes:
+        - name: tests
+          configMap:
+            name: e2e-hurl
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e2e-mesh
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: e2e
+    spec:
+      serviceAccountName: orders
+      restartPolicy: Never
+      containers:
+        - name: hurl
+          image: ghcr.io/orange-opensource/hurl:8.0.1@sha256:49a02dc39d7084e5a6e8c57e2d4754ef102e4ee3761a02ef6dc0e305ab1a832d
+          command: [sh, -c]
+          args:
+            - >-
+              exec hurl --test --jobs 1 --no-color --error-format long
+              --variable idp=http://auth.localtest.me
+              --variable reservation=$(date +%s)
+              --secret bob_app_password="$BOB_APP_PASSWORD"
+              --secret dave_app_password="$DAVE_APP_PASSWORD"
+              /tests/mesh.hurl
+          envFrom:
+            - secretRef:
+                name: demo-credentials
+          volumeMounts:
+            - name: tests
+              mountPath: /tests
+      volumes:
+        - name: tests
+          configMap:
+            name: e2e-hurl

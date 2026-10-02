@@ -1,0 +1,9 @@
+# Mutual TLS between all sidecars in the namespace. Every caller has a
+# verifiable SPIFFE identity, which is what service-to-service rules use.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+spec:
+  mtls:
+    mode: STRICT

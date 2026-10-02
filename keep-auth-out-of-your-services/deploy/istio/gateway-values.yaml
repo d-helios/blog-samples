@@ -1,0 +1,18 @@
+service:
+  type: NodePort
+  ports:
+    - name: status-port
+      port: 15021
+      targetPort: 15021
+    - name: http2
+      port: 80
+      targetPort: 80
+      nodePort: 30080
+
+autoscaling:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi

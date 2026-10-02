@@ -1,0 +1,167 @@
+version: "3"
+
+vars:
+  CLUSTER: auth-demo
+  KIND: '{{.KIND | default "kind"}}'
+  NS: demo
+  IDP_NS: authentik
+  TAG: 0.1.0
+  ISTIO_VERSION: 1.30.5
+  AUTHENTIK_VERSION: 2026.8.3
+  OPA_IMAGE: openpolicyagent/opa:1.21.1-static
+  OPA: docker run --rm -v {{.ROOT_DIR}}/policies:/policies {{.OPA_IMAGE}}
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  up:
+    desc: Create the cluster and deploy everything
+    cmds:
+      - task: cluster
+      - task: istio
+      - task: idp
+      - task: images
+      - task: deploy
+      - cmd: echo "Done. Open http://web.localtest.me"
+        silent: true
+
+  down:
+    desc: Delete the kind cluster
+    cmds:
+      - '{{.KIND}} delete cluster --name {{.CLUSTER}}'
+
+  gen:
+    desc: Generate Go code from proto
+    dir: proto
+    cmds:
+      - buf lint
+      - buf generate
+
+  lint:
+    desc: Static checks for Go, Rego and charts
+    cmds:
+      - go vet ./...
+      - '{{.OPA}} fmt --fail -l /policies'
+      - '{{.OPA}} check --strict /policies'
+      - helm dependency update deploy/umbrella >/dev/null
+      - helm lint deploy/umbrella
+
+  test:policy:
+    desc: Run the Rego unit tests
+    cmds:
+      - '{{.OPA}} test -v /policies'
+
+  cluster:
+    desc: Create the kind cluster
+    status:
+      - '{{.KIND}} get clusters | grep -qx {{.CLUSTER}}'
+    cmds:
+      - '{{.KIND}} create cluster --config kind-config.yaml'
+
+  istio:
+    desc: Install Istio (sidecar mode) with OPA registered as ext_authz provider
+    cmds:
+      - helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update >/dev/null
+      - helm upgrade --install istio-base istio/base -n istio-system --create-namespace --version {{.ISTIO_VERSION}} --wait
+      - helm upgrade --install istiod istio/istiod -n istio-system --version {{.ISTIO_VERSION}} -f deploy/istio/istiod-values.yaml --wait
+      - helm upgrade --install ingress istio/gateway -n istio-ingress --create-namespace --version {{.ISTIO_VERSION}} -f deploy/istio/gateway-values.yaml --wait
+      - task: dns
+
+  dns:
+    desc: Resolve *.localtest.me to the ingress gateway inside the cluster too
+    status:
+      - kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -q localtest
+    cmds:
+      # Pods then use the same URLs as the browser, so the token issuer is
+      # http://auth.localtest.me/ for everyone.
+      - |
+        corefile=$(mktemp)
+        kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' \
+          | awk 'NR==FNR {rule = rule $0 "\n"; next} {print} /^\.:53 \{/ {printf "%s", rule}' deploy/istio/coredns-rewrite.txt - \
+          > "$corefile"
+        kubectl -n kube-system create configmap coredns --from-file=Corefile="$corefile" \
+          --dry-run=client -o yaml | kubectl apply -f -
+        rm "$corefile"
+        kubectl -n kube-system rollout restart deploy/coredns
+        kubectl -n kube-system rollout status deploy/coredns
+
+  idp:
+    desc: Install Authentik with the demo blueprint
+    cmds:
+      - kubectl create namespace {{.IDP_NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.IDP_NS}} create secret generic demo-credentials --from-env-file=deploy/idp/credentials.env --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.IDP_NS}} create configmap demo-blueprints --from-file=deploy/idp/blueprints/ --dry-run=client -o yaml | kubectl apply -f -
+      - helm repo add authentik https://charts.goauthentik.io --force-update >/dev/null
+      - helm upgrade --install authentik authentik/authentik -n {{.IDP_NS}} --version {{.AUTHENTIK_VERSION}} -f deploy/idp/values.yaml --wait --timeout 10m
+      - task: idp:wait
+
+  idp:wait:
+    desc: Wait until the blueprint is applied and tokens can be issued
+    cmds:
+      - |
+        for i in $(seq 1 60); do
+          if kubectl -n {{.IDP_NS}} exec deploy/authentik-server -c server -- python -c \
+              "import urllib.request as u; u.urlopen('http://localhost:9000/application/o/demo-cli/.well-known/openid-configuration')" 2>/dev/null; then
+            echo "authentik is ready"; exit 0
+          fi
+          echo "waiting for authentik blueprint"; sleep 5
+        done
+        echo "authentik did not become ready" >&2; exit 1
+
+  images:
+    desc: Build images and load them into kind
+    cmds:
+      - docker build -t orders:{{.TAG}} -f services/orders/Dockerfile .
+      - docker build -t inventory:{{.TAG}} -f services/inventory/Dockerfile .
+      - docker build -t web:{{.TAG}} services/web
+      - '{{.KIND}} load docker-image --name {{.CLUSTER}} orders:{{.TAG}} inventory:{{.TAG}} web:{{.TAG}}'
+
+  deploy:
+    desc: Deploy services, OPA and mesh policies
+    vars:
+      POLICY_SUM:
+        sh: cat policies/authz.rego policies/log_mask.rego policies/data.json | shasum -a 256 | cut -c1-16
+    cmds:
+      - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl label namespace {{.NS}} istio-injection=enabled --overwrite
+      - kubectl -n {{.NS}} create secret generic demo-credentials --from-env-file=deploy/idp/credentials.env --dry-run=client -o yaml | kubectl apply -f -
+      - |
+        kubectl -n {{.NS}} get secret web-session >/dev/null 2>&1 || \
+          kubectl -n {{.NS}} create secret generic web-session --from-literal=STORAGE_SECRET="$(openssl rand -hex 32)"
+      - >-
+        kubectl -n {{.NS}} create configmap opa-policy
+        --from-file=policies/authz.rego --from-file=policies/log_mask.rego --from-file=policies/data.json
+        --dry-run=client -o yaml | kubectl apply -f -
+      - helm dependency update deploy/umbrella >/dev/null
+      - helm upgrade --install keep-auth-out deploy/umbrella -n {{.NS}} --set opa.policyChecksum={{.POLICY_SUM}} --wait
+      - kubectl -n {{.NS}} rollout restart deploy/orders deploy/inventory deploy/web
+      - kubectl -n {{.NS}} rollout status deploy/orders deploy/inventory deploy/web
+
+  test:e2e:
+    desc: Run the hurl scenarios inside the mesh
+    cmds:
+      - kubectl -n {{.NS}} create configmap e2e-hurl --from-file=test/hurl/ --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.NS}} delete job e2e-users e2e-mesh --ignore-not-found
+      - kubectl -n {{.NS}} apply -f test/k8s/e2e-jobs.yaml
+      - |
+        status=0
+        for job in e2e-users e2e-mesh; do
+          until [ -n "$(kubectl -n {{.NS}} get job $job -o jsonpath='{.status.completionTime}{.status.failed}')" ]; do sleep 2; done
+          echo "--- $job"
+          kubectl -n {{.NS}} logs job/$job -c hurl
+          [ "$(kubectl -n {{.NS}} get job $job -o jsonpath='{.status.succeeded}')" = 1 ] || status=1
+        done
+        exit $status
+
+  test:
+    desc: Policy unit tests and e2e
+    cmds:
+      - task: test:policy
+      - task: test:e2e
+
+  logs:
+    desc: Follow logs of services and OPA decisions
+    cmds:
+      - kubectl -n {{.NS}} logs -f --prefix --max-log-requests 10 -l 'app in (orders,inventory,web,opa)' --all-containers=false

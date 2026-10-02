@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ingress
+description: Routes from the Istio ingress gateway to the web app and Authentik.
+type: application
+version: 0.1.0

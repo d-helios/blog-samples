@@ -1,0 +1,7 @@
+*
+!go.mod
+!go.sum
+!gen/
+!internal/
+!services/orders/
+!services/inventory/

@@ -1,0 +1,23 @@
+image:
+  repository: ""
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+replicas: 1
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 80
+
+env: {}
+secretEnv: {}
+
+# Empty means a TCP probe.
+probePath: /healthz
+writableDirs: []
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi

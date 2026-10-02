@@ -1,0 +1,18 @@
+# Validates any bearer token before the request reaches OPA or the app.
+# A request without a token passes this step; OPA then decides whether the
+# procedure needs one.
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: authentik
+spec:
+  jwtRules:
+    - issuer: {{ .Values.jwt.issuer | quote }}
+      jwksUri: {{ .Values.jwt.jwksUri | quote }}
+      audiences:
+        {{- toYaml .Values.jwt.audiences | nindent 8 }}
+      fromHeaders:
+        - name: Authorization
+          prefix: "Bearer "
+      # Keep the header so services can pass the user's token downstream.
+      forwardOriginalToken: true

@@ -1,0 +1,6 @@
+gatewaySelector:
+  istio: ingress
+
+routes:
+  web.localtest.me: web.demo.svc.cluster.local
+  auth.localtest.me: authentik-server.authentik.svc.cluster.local

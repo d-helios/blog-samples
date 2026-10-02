@@ -1,0 +1,16 @@
+{{- range .Values.protectedWorkloads }}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ . }}-opa
+spec:
+  selector:
+    matchLabels:
+      app: {{ . }}
+  action: CUSTOM
+  provider:
+    name: opa
+  rules:
+    - {}
+{{- end }}

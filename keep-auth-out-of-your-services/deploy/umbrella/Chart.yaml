@@ -1,0 +1,27 @@
+apiVersion: v2
+name: keep-auth-out
+description: orders, inventory and web, with authentication and authorization in the mesh.
+type: application
+version: 0.1.0
+dependencies:
+  - name: app
+    alias: orders
+    version: 0.1.0
+    repository: file://../charts/app
+  - name: app
+    alias: inventory
+    version: 0.1.0
+    repository: file://../charts/app
+  - name: app
+    alias: web
+    version: 0.1.0
+    repository: file://../charts/app
+  - name: opa
+    version: 0.1.0
+    repository: file://../charts/opa
+  - name: authz
+    version: 0.1.0
+    repository: file://../charts/authz
+  - name: ingress
+    version: 0.1.0
+    repository: file://../charts/ingress
