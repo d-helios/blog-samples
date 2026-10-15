@@ -1,0 +1,66 @@
+# Perses MCP server over streamable HTTP. It has no auth of its own: the
+# ingress gateway is the only way in, and it is the one that checks tokens.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: perses-mcp
+data:
+  config.yaml: |
+    transport: http
+    listen_address: ":8000"
+    perses_server:
+      url: http://perses:8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perses-mcp
+spec:
+  selector:
+    app: perses-mcp
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perses-mcp
+  labels:
+    app: perses-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: perses-mcp
+  template:
+    metadata:
+      labels:
+        app: perses-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: persesdev/mcp-server:v0.2.0
+          args: [--config=/etc/mcp/config.yaml]
+          env:
+            # A native Perses user created by `task perses:bot`.
+            - name: PERMCP_PERSES_SERVER_NATIVE_AUTH_LOGIN
+              value: mcp-bot
+            - name: PERMCP_PERSES_SERVER_NATIVE_AUTH_PASSWORD
+              valueFrom: {secretKeyRef: {name: perses-mcp-bot, key: password}}
+          ports:
+            - {name: http, containerPort: 8000}
+          readinessProbe:
+            tcpSocket: {port: http}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/mcp, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: perses-mcp

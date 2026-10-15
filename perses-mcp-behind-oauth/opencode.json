@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "perses": {
+      "type": "remote",
+      "url": "https://mcp.localhost/mcp",
+      "oauth": {
+        "clientId": "perses-mcp",
+        "scope": "openid profile email offline_access"
+      }
+    }
+  }
+}

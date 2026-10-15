@@ -1,0 +1,4 @@
+    rewrite stop {
+        name regex auth\.localhost\.$ ingress.istio-ingress.svc.cluster.local.
+        answer auto
+    }

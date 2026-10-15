@@ -1,0 +1,68 @@
+# OPA as the Envoy ext_authz server for the ingress gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: opa
+spec:
+  selector:
+    app: opa
+  ports:
+    - name: grpc-authz
+      port: 9191
+      targetPort: grpc-authz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opa
+  labels:
+    app: opa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opa
+  template:
+    metadata:
+      labels:
+        app: opa
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: opa
+          image: openpolicyagent/opa:1.21.2-envoy-static@sha256:a50c7329bbf7301d32b1cc5c4b7bf73491d54c82d193fb5ecdebdf7e4ca0fb62
+          args:
+            - run
+            - --server
+            - --addr=localhost:8181
+            - --diagnostic-addr=0.0.0.0:8282
+            - --log-format=json
+            - --set=plugins.envoy_ext_authz_grpc.addr=:9191
+            - --set=plugins.envoy_ext_authz_grpc.path=envoy/authz/result
+            - --set=decision_logs.console=true
+            - /policy/mcp.rego
+            - /policy/log_mask.rego
+            - /policy/data.json
+          ports:
+            - {name: grpc-authz, containerPort: 9191}
+            - {name: diagnostics, containerPort: 8282}
+          readinessProbe:
+            httpGet: {path: "/health?plugins", port: diagnostics}
+          livenessProbe:
+            httpGet: {path: /health, port: diagnostics}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+          volumeMounts:
+            - {name: policy, mountPath: /policy, readOnly: true}
+      volumes:
+        - name: policy
+          configMap:
+            name: opa-policy

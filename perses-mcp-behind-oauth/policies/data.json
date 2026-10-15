@@ -1,0 +1,5 @@
+{
+  "issuer": "https://auth.localhost/application/o/perses-mcp/",
+  "group": "Observability MCP",
+  "resource_metadata": "https://mcp.localhost/.well-known/oauth-protected-resource"
+}

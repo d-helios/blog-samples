@@ -1,0 +1,36 @@
+authentik:
+  # Demo-only secrets. Do not reuse.
+  secret_key: demo-secret-key-0123456789abcdefghijklmnopqrstuvwxyz
+  postgresql:
+    password: demo-postgres-password
+  error_reporting:
+    enabled: false
+
+global:
+  envFrom:
+    - secretRef:
+        name: demo-credentials
+
+blueprints:
+  configMaps:
+    - demo-blueprints
+
+server:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+worker:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+postgresql:
+  enabled: true
+  auth:
+    password: demo-postgres-password
+  primary:
+    persistence:
+      size: 1Gi

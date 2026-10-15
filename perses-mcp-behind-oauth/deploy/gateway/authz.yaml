@@ -1,0 +1,48 @@
+# Token validation on the gateway. A request without a token passes this
+# step; OPA then answers 401 with the WWW-Authenticate header MCP clients need.
+apiVersion: security.istio.io/v1
+kind: RequestAuthentication
+metadata:
+  name: authentik
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels: {istio: ingress}
+  jwtRules:
+    - issuer: https://auth.localhost/application/o/perses-mcp/
+      # Sidecars and gateways fetch keys only from hosts in the mesh registry,
+      # so this is the Kubernetes service, not the public name.
+      jwksUri: http://authentik-server.authentik.svc.cluster.local/application/o/perses-mcp/jwks/
+      audiences: [perses-mcp]
+      fromHeaders:
+        - {name: Authorization, prefix: "Bearer "}
+    # Applies to every host on the gateway, so Perses' own userinfo calls
+    # (token issued for the "perses" client) must validate too. OPA only
+    # accepts the perses-mcp issuer on the MCP host.
+    - issuer: https://auth.localhost/application/o/perses/
+      jwksUri: http://authentik-server.authentik.svc.cluster.local/application/o/perses/jwks/
+      audiences: [perses]
+      fromHeaders:
+        - {name: Authorization, prefix: "Bearer "}
+      # Authentik's userinfo endpoint needs the token it is being asked about.
+      forwardOriginalToken: true
+---
+# Only the MCP host goes through OPA; Perses and Authentik do their own auth.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mcp-opa
+  namespace: istio-ingress
+spec:
+  selector:
+    matchLabels: {istio: ingress}
+  action: CUSTOM
+  provider:
+    name: opa
+  rules:
+    # Only the TLS port. On :80 the gateway's job is to redirect, and running
+    # the ext_authz check first would answer 401 instead of the redirect.
+    - to:
+        - operation:
+            hosts: [mcp.localhost]
+            ports: ["443"]
