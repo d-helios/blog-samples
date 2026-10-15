@@ -1,0 +1,199 @@
+version: "3"
+
+vars:
+  CLUSTER: mcp-demo
+  KIND: '{{.KIND | default "kind"}}'
+  NS: observability
+  IDP_NS: authentik
+  ISTIO_VERSION: 1.30.5
+  AUTHENTIK_VERSION: 2026.8.4
+  PERSES_CHART_VERSION: 0.23.3
+  VM_STACK_VERSION: 0.96.0
+  VL_COLLECTOR_VERSION: 0.3.8
+  OPA_IMAGE: openpolicyagent/opa:1.21.2-static
+  OPA: docker run --rm -v {{.ROOT_DIR}}/policies:/policies {{.OPA_IMAGE}}
+  CERT_MANAGER_VERSION: 1.21.2
+  BOT_PASSWORD: demo-mcp-bot-password
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  up:
+    desc: Create the cluster and deploy everything
+    cmds:
+      - task: cluster
+      - task: istio
+      - task: certmanager
+      - task: ca
+      - task: idp
+      # Gateway before Perses: it discovers the OIDC issuer through it on start.
+      - task: gateway
+      - task: victoria
+      - task: perses
+      - task: mcp
+      - cmd: echo "Done. Perses https://perses.localhost, Authentik https://auth.localhost, MCP https://mcp.localhost/mcp"
+        silent: true
+
+  down:
+    desc: Delete the kind cluster
+    cmds:
+      - '{{.KIND}} delete cluster --name {{.CLUSTER}}'
+
+  test:policy:
+    desc: Run the Rego unit tests
+    cmds:
+      - '{{.OPA}} fmt --fail -l /policies'
+      - '{{.OPA}} check --strict /policies'
+      - '{{.OPA}} test -v /policies'
+
+  test:e2e:
+    desc: Check the 401 challenge, the group rule and an MCP call through the gateway
+    cmds:
+      - test/e2e.sh
+
+  test:
+    desc: Policy unit tests and e2e
+    cmds:
+      - task: test:policy
+      - task: test:e2e
+
+  cluster:
+    desc: Create the kind cluster
+    status:
+      - '{{.KIND}} get clusters | grep -qx {{.CLUSTER}}'
+    cmds:
+      - '{{.KIND}} create cluster --config kind-config.yaml'
+
+  istio:
+    desc: Install Istio (ingress gateway only) with OPA registered as ext_authz provider
+    cmds:
+      - helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update >/dev/null
+      - helm upgrade --install istio-base istio/base -n istio-system --create-namespace --version {{.ISTIO_VERSION}} --wait
+      - helm upgrade --install istiod istio/istiod -n istio-system --version {{.ISTIO_VERSION}} -f deploy/istio/istiod-values.yaml --wait
+      - helm upgrade --install ingress istio/gateway -n istio-ingress --create-namespace --version {{.ISTIO_VERSION}} -f deploy/istio/gateway-values.yaml --wait
+      - task: dns
+
+  dns:
+    desc: Resolve auth.localhost to the ingress gateway inside the cluster
+    status:
+      - kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -q auth.localhost
+    cmds:
+      # Pods then use the same URLs as the browser, so the token issuer is
+      # https://auth.localhost/... for everyone (Perses logs in against it).
+      - |
+        corefile=$(mktemp)
+        kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' \
+          | awk 'NR==FNR {rule = rule $0 "\n"; next} {print} /^\.:53 \{/ {printf "%s", rule}' deploy/istio/coredns-rewrite.txt - \
+          > "$corefile"
+        kubectl -n kube-system create configmap coredns --from-file=Corefile="$corefile" \
+          --dry-run=client -o yaml | kubectl apply -f -
+        rm "$corefile"
+        kubectl -n kube-system rollout restart deploy/coredns
+        kubectl -n kube-system rollout status deploy/coredns
+
+  certmanager:
+    desc: Install cert-manager (CRDs included) to issue the gateway certificate
+    cmds:
+      - helm repo add jetstack https://charts.jetstack.io --force-update >/dev/null
+      - helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --version {{.CERT_MANAGER_VERSION}} --set crds.enabled=true --wait --timeout 5m
+
+  ca:
+    desc: Load the lab CA from passage and wire cert-manager and Perses to trust it
+    cmds:
+      - |
+        set -eu
+        dir="$(mktemp -d)"
+        trap 'rm -rf "$dir"' EXIT
+        passage show local/lab/ca.pem > "$dir/ca.crt"
+        passage show local/lab/ca.key > "$dir/ca.key"
+        kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f -
+        # Signing CA for cert-manager. The private key stays in istio-ingress,
+        # where the gateway consumes the certificate it signs.
+        kubectl -n istio-ingress create secret tls local-lab-ca \
+          --cert="$dir/ca.crt" --key="$dir/ca.key" \
+          --dry-run=client -o yaml | kubectl apply -f -
+        # Public CA for workloads that must trust the gateway: Perses fetches
+        # the OIDC discovery from https://auth.localhost, through the gateway.
+        kubectl -n {{.NS}} create configmap local-lab-ca \
+          --from-file=ca.crt="$dir/ca.crt" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f deploy/cert-manager/
+      - kubectl -n istio-ingress wait --for=condition=Ready certificate/gateway-tls --timeout=3m
+
+  idp:
+    desc: Install Authentik with the demo blueprint
+    cmds:
+      - kubectl create namespace {{.IDP_NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.IDP_NS}} create secret generic demo-credentials --from-env-file=deploy/idp/credentials.env --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.IDP_NS}} create configmap demo-blueprints --from-file=deploy/idp/blueprints/ --dry-run=client -o yaml | kubectl apply -f -
+      - helm repo add authentik https://charts.goauthentik.io --force-update >/dev/null
+      - helm upgrade --install authentik authentik/authentik -n {{.IDP_NS}} --version {{.AUTHENTIK_VERSION}} -f deploy/idp/values.yaml --wait --timeout 10m
+      - task: idp:wait
+
+  idp:wait:
+    desc: Wait until the blueprint is applied and both providers exist
+    cmds:
+      - |
+        for i in $(seq 1 60); do
+          if kubectl -n {{.IDP_NS}} exec deploy/authentik-server -c server -- python -c \
+              "import urllib.request as u; [u.urlopen('http://localhost:9000/application/o/%s/.well-known/openid-configuration' % s) for s in ('perses', 'perses-mcp')]" 2>/dev/null; then
+            echo "authentik is ready"; exit 0
+          fi
+          echo "waiting for authentik blueprint"; sleep 5
+        done
+        echo "authentik did not become ready" >&2; exit 1
+
+  victoria:
+    desc: Install the VictoriaMetrics operator stack, VictoriaLogs and the log collector
+    cmds:
+      - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - helm repo add vm https://victoriametrics.github.io/helm-charts/ --force-update >/dev/null
+      # Operator, VMSingle, VMAgent (metrics) and the CRDs the next step needs.
+      - helm upgrade --install vm vm/victoria-metrics-k8s-stack --version {{.VM_STACK_VERSION}} -n {{.NS}} -f deploy/victoria/stack-values.yaml --wait --timeout 10m
+      - kubectl -n {{.NS}} apply -f deploy/victoria/vlsingle.yaml
+      - kubectl -n {{.NS}} wait --for=jsonpath='{.status.updateStatus}'=operational vlsingle/logs --timeout=5m
+      - helm upgrade --install vlcollector vm/victoria-logs-collector --version {{.VL_COLLECTOR_VERSION}} -n {{.NS}} -f deploy/victoria/collector-values.yaml --wait
+
+  perses:
+    desc: Install Perses (sign-in with Authentik) and connect VictoriaMetrics as datasource
+    cmds:
+      - kubectl create namespace {{.NS}} --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.NS}} apply -f deploy/perses/provisioning.yaml
+      - helm repo add perses https://perses.github.io/helm-charts --force-update >/dev/null
+      - helm upgrade --install perses perses/perses -n {{.NS}} --version {{.PERSES_CHART_VERSION}} -f deploy/perses/values.yaml --wait --timeout 5m
+      - task: perses:bot
+
+  perses:bot:
+    desc: Create the native Perses user the MCP server signs in as
+    cmds:
+      - kubectl -n {{.NS}} create secret generic perses-mcp-bot --from-literal=password={{.BOT_PASSWORD}} --dry-run=client -o yaml | kubectl apply -f -
+      - |
+        set -eu
+        dir="$(mktemp -d)"
+        trap 'rm -rf "$dir"' EXIT
+        passage show local/lab/ca.pem > "$dir/ca.crt"
+        # 409 means the user already exists.
+        code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$dir/ca.crt" -X POST https://perses.localhost/api/v1/users \
+          -H 'Content-Type: application/json' \
+          -d '{"kind":"User","metadata":{"name":"mcp-bot"},"spec":{"nativeProvider":{"password":"{{.BOT_PASSWORD}}"}}}')
+        case "$code" in 200|201|409) ;; *) echo "creating mcp-bot failed: HTTP $code" >&2; exit 1 ;; esac
+
+  mcp:
+    desc: Deploy the Perses MCP server and OPA with the group policy
+    cmds:
+      - kubectl -n {{.NS}} create configmap opa-policy --from-file=policies/mcp.rego --from-file=policies/log_mask.rego --from-file=policies/data.json --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl -n {{.NS}} apply -f deploy/opa/opa.yaml -f deploy/mcp/perses-mcp.yaml
+      - kubectl -n {{.NS}} rollout restart deploy/opa deploy/perses-mcp
+      - kubectl -n {{.NS}} rollout status deploy/opa deploy/perses-mcp
+
+  gateway:
+    desc: Expose auth, perses and mcp hosts; enforce OAuth on the MCP host
+    cmds:
+      - kubectl apply -f deploy/gateway/
+
+  logs:
+    desc: Follow OPA decisions and MCP server logs
+    cmds:
+      - kubectl -n {{.NS}} logs -f --prefix --max-log-requests 5 -l 'app in (opa,perses-mcp)'

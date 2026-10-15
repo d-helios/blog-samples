@@ -1,0 +1,6 @@
+# vlagent as a DaemonSet: reads container logs on every node and ships them
+# to VictoriaLogs (/insert/native by default).
+remoteWrite:
+  - url: http://vlsingle-logs.observability.svc:9428
+resources:
+  requests: {cpu: 50m, memory: 64Mi}

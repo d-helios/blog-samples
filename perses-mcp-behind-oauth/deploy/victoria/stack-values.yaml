@@ -1,0 +1,30 @@
+# Operator, VMSingle, VMAgent, kube-state-metrics, node-exporter and the
+# scrape objects for the cluster components. Everything else is off.
+fullnameOverride: vm
+
+defaultDashboards: {enabled: false}
+defaultRules: {create: false}
+alertmanager: {enabled: false}
+vmalert: {enabled: false}
+grafana: {enabled: false}
+
+vmsingle:
+  spec:
+    retentionPeriod: 1d
+    storage:
+      resources:
+        requests:
+          storage: 2Gi
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+
+vmagent:
+  spec:
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+
+# kind runs these bound to localhost, so scraping them only produces errors.
+kubeControllerManager: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeEtcd: {enabled: false}
+kubeProxy: {enabled: false}

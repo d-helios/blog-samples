@@ -1,0 +1,53 @@
+# Demo-only secrets. Do not reuse.
+sidecar:
+  enabled: true
+  image:
+    tag: 2.14.1
+  # Perses role bindings are per user name (no groups). mcp-bot is the
+  # account the MCP server uses; alice signs in with Authentik.
+  globalAdminUsers: [mcp-bot, alice]
+
+# The chart's schema has no encryption_key field; Perses reads it from env.
+envVars:
+  - name: PERSES_SECURITY_ENCRYPTION_KEY
+    value: demo-encryption-key-0123456789ab
+  # The OIDC issuer is now https://auth.localhost, which this pod reaches
+  # through the gateway, so it must trust the lab CA (public cert only; the
+  # ConfigMap is created by `task ca`). SSL_CERT_FILE replaces the default
+  # trust store, which is fine here: everything this pod talks to is internal.
+  - name: SSL_CERT_FILE
+    value: /etc/local-ca/ca.crt
+
+volumes:
+  - name: local-ca
+    configMap:
+      name: local-lab-ca
+
+volumeMounts:
+  - name: local-ca
+    mountPath: /etc/local-ca
+    readOnly: true
+
+config:
+  provisioning:
+    folders: [/etc/perses/provisioning]
+    interval: 30s
+  security:
+    enable_auth: true
+    authentication:
+      providers:
+        enable_native: true
+        oidc:
+          - slug_id: authentik
+            name: Authentik
+            client_id: perses
+            client_secret: demo-perses-client-secret
+            # Same URL for the browser and for this pod (see `task dns`).
+            issuer: https://auth.localhost/application/o/perses/
+            redirect_uri: https://perses.localhost/api/auth/providers/oidc/authentik/callback
+            scopes: [openid, profile, email]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi

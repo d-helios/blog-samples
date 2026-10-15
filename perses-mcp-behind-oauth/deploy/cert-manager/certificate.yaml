@@ -1,0 +1,23 @@
+# Gateway certificate for every public host, signed by the lab CA.
+# cert-manager writes secret "gateway-tls" (kubernetes.io/tls), which the
+# Istio Gateway references through tls.credentialName.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-tls
+  namespace: istio-ingress
+spec:
+  secretName: gateway-tls
+  issuerRef:
+    name: local-lab-ca
+    kind: Issuer
+    group: cert-manager.io
+  duration: 2160h # 90 days
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - auth.localhost
+    - perses.localhost
+    - mcp.localhost

@@ -1,0 +1,14 @@
+# VictoriaLogs, managed by the same operator. Service: vlsingle-logs:9428.
+apiVersion: operator.victoriametrics.com/v1
+kind: VLSingle
+metadata:
+  name: logs
+spec:
+  retentionPeriod: 1d
+  storage:
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 2Gi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}

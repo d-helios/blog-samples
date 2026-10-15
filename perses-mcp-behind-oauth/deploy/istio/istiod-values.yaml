@@ -1,0 +1,18 @@
+pilot:
+  autoscaleEnabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  env:
+    # The gateway fetches Authentik's JWKS itself and retries until it is up.
+    PILOT_JWT_ENABLE_REMOTE_JWKS: envoy
+
+meshConfig:
+  accessLogFile: /dev/stdout
+  accessLogEncoding: JSON
+  extensionProviders:
+    - name: opa
+      envoyExtAuthzGrpc:
+        service: opa.observability.svc.cluster.local
+        port: 9191

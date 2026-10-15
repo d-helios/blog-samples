@@ -1,0 +1,11 @@
+# cert-manager CA issuer backed by the local lab CA that `task ca` loads from
+# passage (path local/lab/ca.pem + local/lab/ca.key). It lives in istio-ingress
+# so the certificate it issues lands next to the gateway that consumes it.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: local-lab-ca
+  namespace: istio-ingress
+spec:
+  ca:
+    secretName: local-lab-ca

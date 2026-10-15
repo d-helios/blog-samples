@@ -1,0 +1,78 @@
+# Public hosts on the Istio ingress gateway.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: public
+  namespace: istio-ingress
+spec:
+  selector:
+    istio: ingress
+  servers:
+    # TLS terminates here with the cert-manager certificate (secret
+    # "gateway-tls") issued from the lab CA.
+    - port: {number: 443, name: https, protocol: HTTPS}
+      tls:
+        mode: SIMPLE
+        credentialName: gateway-tls
+      hosts: ["auth.localhost", "perses.localhost", "mcp.localhost"]
+    # Plain HTTP only redirects to HTTPS.
+    - port: {number: 80, name: http, protocol: HTTP}
+      tls: {httpsRedirect: true}
+      hosts: ["auth.localhost", "perses.localhost", "mcp.localhost"]
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: auth
+  namespace: istio-ingress
+spec:
+  hosts: [auth.localhost]
+  gateways: [public]
+  http:
+    - route:
+        - destination: {host: authentik-server.authentik.svc.cluster.local, port: {number: 80}}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: perses
+  namespace: istio-ingress
+spec:
+  # The gateway terminates TLS, so Perses' login-state cookie (Secure,
+  # SameSite=None) is kept by the browser on https://perses.localhost.
+  hosts: [perses.localhost]
+  gateways: [public]
+  http:
+    - route:
+        - destination: {host: perses.observability.svc.cluster.local, port: {number: 8080}}
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: mcp
+  namespace: istio-ingress
+spec:
+  hosts: [mcp.localhost]
+  gateways: [public]
+  http:
+    # RFC 9728 protected resource metadata: tells an MCP client which
+    # authorization server to use. Static, so the gateway answers itself.
+    - match:
+        - uri: {prefix: /.well-known/oauth-protected-resource}
+      headers:
+        response:
+          set: {content-type: application/json}
+      directResponse:
+        status: 200
+        body:
+          string: >-
+            {"resource":"https://mcp.localhost/mcp",
+            "authorization_servers":["https://auth.localhost/application/o/perses-mcp/"],
+            "scopes_supported":["openid","profile","email","offline_access"],
+            "bearer_methods_supported":["header"]}
+    - route:
+        - destination: {host: perses-mcp.observability.svc.cluster.local, port: {number: 8000}}
+      headers:
+        request:
+          # The MCP server uses its own Perses credentials, not the user's token.
+          remove: [authorization]
